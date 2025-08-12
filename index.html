@@ -38,10 +38,12 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             padding: 15px;
+            position: relative;
         }
         canvas {
             width: 100% !important;
             height: 300px !important;
+            touch-action: none; /* For zoom/pan */
         }
         button, select {
             padding: 10px 15px;
@@ -65,6 +67,16 @@
             align-items: center;
             gap: 10px;
         }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
@@ -77,6 +89,7 @@
                 <div>
                     <input type="file" id="fileInput" accept=".txt,.csv,.las">
                     <button onclick="parseFile()">Load & Plot Data</button>
+                    <button onclick="exportCharts()">Export All Charts</button>
                 </div>
                 <div class="unit-selection">
                     <label for="unitSelect">MD Units:</label>
@@ -93,31 +106,38 @@
             <div class="chart-wrapper" style="background-color: #f0f8ff;">
                 <h3>MD vs Inclination (INC)</h3>
                 <canvas id="incChart"></canvas>
+                <div class="tooltip" id="incTooltip"></div>
             </div>
             <div class="chart-wrapper" style="background-color: #f0fff0;">
                 <h3>MD vs Azimuth (AZI)</h3>
                 <canvas id="aziChart"></canvas>
+                <div class="tooltip" id="aziTooltip"></div>
             </div>
             <div class="chart-wrapper" style="background-color: #fff0f5;">
                 <h3>MD vs True Vertical Depth (TVD)</h3>
                 <canvas id="tvdChart"></canvas>
+                <div class="tooltip" id="tvdTooltip"></div>
             </div>
             <div class="chart-wrapper" style="background-color: #f5f0ff;">
                 <h3>MD vs Delta Inclination (ΔINC)</h3>
                 <canvas id="deltaIncChart"></canvas>
+                <div class="tooltip" id="deltaIncTooltip"></div>
             </div>
             <div class="chart-wrapper" style="background-color: #fff8f0;">
                 <h3>MD vs Delta Azimuth (ΔAZI)</h3>
                 <canvas id="deltaAziChart"></canvas>
+                <div class="tooltip" id="deltaAziTooltip"></div>
             </div>
         </div>
     </div>
 
     <script>
+        // Global variables
         let surveyData = [];
-        let currentUnits = 'ft'; // Default units
-        const FT_TO_M = 0.3048; // Conversion factor
+        let currentUnits = 'ft';
+        const FT_TO_M = 0.3048;
 
+        // Parse uploaded file
         function parseFile() {
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
@@ -142,19 +162,22 @@
             reader.readAsText(file);
         }
 
+        // Parse different file formats
         function parseWellData(content, filename) {
             const lines = content.split('\n');
             const data = [];
             let isLAS = filename.toLowerCase().endsWith('.las');
+            let inDataSection = false;
             
             for (let line of lines) {
                 line = line.trim();
                 if (!line) continue;
                 
                 // LAS file parsing
-                if (isLAS && line.startsWith('~A')) {
-                    // Skip LAS header and process data section
-                    continue;
+                if (isLAS) {
+                    if (line.startsWith('~A')) inDataSection = true;
+                    if (!inDataSection) continue;
+                    if (line.startsWith('~')) break; // End of data section
                 }
                 
                 // Split by comma (CSV) or whitespace
@@ -173,28 +196,22 @@
             return data;
         }
 
-        function updateUnits() {
-            currentUnits = document.getElementById('unitSelect').value;
-            if (surveyData.length > 0) {
-                drawCharts(); // Redraw with new units
-            }
-        }
-
+        // Process survey data
         function processData() {
-            // Convert MD to consistent units (store as meters internally)
+            // Convert MD to meters for internal calculations
             surveyData.forEach(point => {
                 point.md_meters = currentUnits === 'ft' ? point.md * FT_TO_M : point.md;
             });
 
-            // Calculate TVD using minimum curvature approximation
+            // Calculate TVD using minimum curvature
             let tvd_meters = 0;
             for (let i = 0; i < surveyData.length; i++) {
                 if (i === 0) {
                     surveyData[i].tvd_meters = 0;
                 } else {
                     const deltaMD = surveyData[i].md_meters - surveyData[i-1].md_meters;
-                    const avgInc = (surveyData[i].inc + surveyData[i-1].inc) / 2;
-                    tvd_meters += deltaMD * Math.cos(avgInc * Math.PI / 180);
+                    const avgInc = (surveyData[i].inc + surveyData[i-1].inc) / 2 * Math.PI / 180;
+                    tvd_meters += deltaMD * Math.cos(avgInc);
                     surveyData[i].tvd_meters = tvd_meters;
                 }
             }
@@ -211,27 +228,36 @@
             }
         }
 
+        // Update units and redraw
+        function updateUnits() {
+            currentUnits = document.getElementById('unitSelect').value;
+            if (surveyData.length > 0) {
+                drawCharts();
+            }
+        }
+
+        // Convert internal meters to display units
         function getDisplayMD(md_meters) {
             return currentUnits === 'ft' ? md_meters / FT_TO_M : md_meters;
         }
 
+        // Draw all charts
         function drawCharts() {
             const mdLabel = `MD (${currentUnits})`;
-            drawChart('incChart', 'Inclination (deg)', surveyData.map(d => d.inc), '#43a047', mdLabel);
-            drawChart('aziChart', 'Azimuth (deg)', surveyData.map(d => d.azi), '#1e88e5', mdLabel);
-            drawChart('tvdChart', `TVD (${currentUnits})`, 
-                    surveyData.map(d => getDisplayMD(d.tvd_meters)), '#e53935', mdLabel);
-            drawChart('deltaIncChart', 'Δ Inclination (deg)', 
-                    surveyData.map(d => d.deltaInc), '#fb8c00', mdLabel);
-            drawChart('deltaAziChart', 'Δ Azimuth (deg)', 
-                    surveyData.map(d => d.deltaAzi), '#8e24aa', mdLabel);
+            drawChart('incChart', 'Inclination (deg)', surveyData.map(d => d.inc), '#43a047', mdLabel, 'incTooltip');
+            drawChart('aziChart', 'Azimuth (deg)', surveyData.map(d => d.azi), '#1e88e5', mdLabel, 'aziTooltip');
+            drawChart('tvdChart', `TVD (${currentUnits})`, surveyData.map(d => getDisplayMD(d.tvd_meters)), '#e53935', mdLabel, 'tvdTooltip');
+            drawChart('deltaIncChart', 'Δ Inclination (deg)', surveyData.map(d => d.deltaInc), '#fb8c00', mdLabel, 'deltaIncTooltip');
+            drawChart('deltaAziChart', 'Δ Azimuth (deg)', surveyData.map(d => d.deltaAzi), '#8e24aa', mdLabel, 'deltaAziTooltip');
         }
 
-        function drawChart(canvasId, yLabel, yData, lineColor, xLabel) {
+        // Draw individual chart
+        function drawChart(canvasId, yLabel, yData, lineColor, xLabel, tooltipId) {
             const canvas = document.getElementById(canvasId);
             const ctx = canvas.getContext('2d');
+            const tooltip = document.getElementById(tooltipId);
             
-            // Set canvas to full width of parent
+            // Set canvas dimensions
             canvas.width = canvas.parentElement.clientWidth - 40;
             canvas.height = 300;
 
@@ -262,7 +288,7 @@
                 ctx.lineTo(x, canvas.height - padding);
                 ctx.stroke();
                 
-                // X-axis labels (MD)
+                // X-axis labels
                 ctx.fillStyle = '#555';
                 ctx.font = '10px Arial';
                 ctx.textAlign = 'center';
@@ -324,7 +350,7 @@
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // Draw data points (dots)
+            // Draw data points
             ctx.fillStyle = lineColor;
             for (let i = 0; i < surveyData.length; i++) {
                 const displayMD = getDisplayMD(surveyData[i].md_meters);
@@ -334,6 +360,68 @@
                 ctx.arc(x, y, 3, 0, Math.PI * 2);
                 ctx.fill();
             }
+
+            // Add tooltip interaction
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Find closest data point
+                let closestIndex = 0;
+                let minDistance = Infinity;
+                
+                for (let i = 0; i < surveyData.length; i++) {
+                    const displayMD = getDisplayMD(surveyData[i].md_meters);
+                    const pointX = padding + ((displayMD - minMD) / (maxMD - minMD)) * width;
+                    const pointY = canvas.height - padding - ((yData[i] - minY) / (maxY - minY)) * height;
+                    const distance = Math.sqrt(Math.pow(x - pointX, 2) + Math.pow(y - pointY, 2));
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestIndex = i;
+                    }
+                }
+                
+                // Show tooltip if close to a point
+                if (minDistance < 20) {
+                    const displayMD = getDisplayMD(surveyData[closestIndex].md_meters);
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = `${e.clientX + 10}px`;
+                    tooltip.style.top = `${e.clientY - 30}px`;
+                    tooltip.innerHTML = `
+                        <div>MD: ${displayMD.toFixed(2)} ${currentUnits}</div>
+                        <div>${yLabel}: ${yData[closestIndex].toFixed(2)}</div>
+                    `;
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            });
+            
+            canvas.addEventListener('mouseout', () => {
+                tooltip.style.display = 'none';
+            });
+
+            // Add zoom/pan (basic implementation)
+            let zoom = 1, pan = 0;
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                zoom += e.deltaY * -0.01;
+                zoom = Math.min(Math.max(0.5, zoom), 5);
+                drawCharts(); // Simplified - would need more complex handling
+            });
+        }
+
+        // Export charts as PNG
+        function exportCharts() {
+            const chartIds = ['incChart', 'aziChart', 'tvdChart', 'deltaIncChart', 'deltaAziChart'];
+            chartIds.forEach(id => {
+                const canvas = document.getElementById(id);
+                const link = document.createElement('a');
+                link.download = `${id}_well_data.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            });
         }
 
         // Helper function for nice axis increments
